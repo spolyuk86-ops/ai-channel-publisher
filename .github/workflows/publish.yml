@@ -1,78 +1,34 @@
-"""
-Публікує пост у Telegram-канал відповідно до поточного дня тижня та часу (UTC),
-або примусово — якщо задано змінну середовища FORCE_SLOT (для ручного тесту).
-"""
+name: Publish scheduled post
 
-import json
-import os
-import sys
-import urllib.request
-import urllib.parse
-from datetime import datetime, timezone
+on:
+  schedule:
+    - cron: "0 5 * * *"
+    - cron: "0 8 * * *"
+    - cron: "0 12 * * *"
+  workflow_dispatch:
+    inputs:
+      force_slot:
+        description: "Тест: примусово відправити пост цього слоту прямо зараз (залиште порожнім для звичайного запуску)"
+        required: false
+        type: choice
+        options:
+          - ""
+          - "08:00"
+          - "11:00"
+          - "15:00"
+        default: ""
 
-UTC_HOUR_TO_SLOT = {
-    5: "08:00",
-    8: "11:00",
-    12: "15:00",
-}
-
-WEEKDAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
-
-
-def load_schedule():
-    with open(os.path.join(os.path.dirname(__file__), "schedule.json"), "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def get_current_slot():
-    now = datetime.now(timezone.utc)
-    weekday = WEEKDAYS[now.weekday()]
-    slot = UTC_HOUR_TO_SLOT.get(now.hour)
-    return weekday, slot
-
-
-def send_message(token: str, chat_id: str, text: str):
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    data = urllib.parse.urlencode({
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "HTML",
-    }).encode()
-    req = urllib.request.Request(url, data=data)
-    with urllib.request.urlopen(req) as resp:
-        result = resp.read().decode()
-        print(result)
-
-
-def main():
-    token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    channel = os.environ.get("CHANNEL_USERNAME")
-    if not token or not channel:
-        print("Помилка: не задано TELEGRAM_BOT_TOKEN або CHANNEL_USERNAME")
-        sys.exit(1)
-
-    force_slot = os.environ.get("FORCE_SLOT", "").strip()
-    now = datetime.now(timezone.utc)
-    weekday = WEEKDAYS[now.weekday()]
-
-    if force_slot:
-        slot = force_slot
-        print(f"Тестовий режим: примусово беремо слот {slot} для {weekday}")
-    else:
-        weekday, slot = get_current_slot()
-        if not slot:
-            print("Поточна UTC-година не відповідає жодному слоту публікації. Нічого не робимо.")
-            return
-
-    schedule = load_schedule()
-    text = schedule.get(weekday, {}).get(slot)
-    if not text:
-        print(f"Немає поста для {weekday} / {slot}")
-        return
-
-    send_message(token, channel, text)
-    print(f"Опубліковано: {weekday} {slot}")
-
-
-if __name__ == "__main__":
-    main()
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Publish post
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHANNEL_USERNAME: ${{ secrets.CHANNEL_USERNAME }}
+          FORCE_SLOT: ${{ github.event.inputs.force_slot }}
+        run: python publish.py
