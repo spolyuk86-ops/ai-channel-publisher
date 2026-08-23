@@ -1,11 +1,6 @@
 """
-Публікує пост у Telegram-канал відповідно до поточного дня тижня та часу (UTC).
-Токен бота і назва каналу беруться з змінних середовища (GitHub Secrets) —
-ніде в коді вони не зберігаються.
-
-Змінні середовища:
-  TELEGRAM_BOT_TOKEN   — токен бота від @BotFather
-  CHANNEL_USERNAME     — @AI_NA_KAGDIY_DEN (або числовий chat_id)
+Публікує пост у Telegram-канал відповідно до поточного дня тижня та часу (UTC),
+або примусово — якщо задано змінну середовища FORCE_SLOT (для ручного тесту).
 """
 
 import json
@@ -15,10 +10,6 @@ import urllib.request
 import urllib.parse
 from datetime import datetime, timezone
 
-# Відповідність UTC-години слоту публікації.
-# 08:00 / 11:00 / 15:00 за Києвом (EEST, UTC+3) = 05:00 / 08:00 / 12:00 UTC.
-# Якщо в Україні діє зимовий час (UTC+2), зсуньте ці значення на -1 годину
-# або поправте cron-розклад у .github/workflows/publish.yml.
 UTC_HOUR_TO_SLOT = {
     5: "08:00",
     8: "11:00",
@@ -60,10 +51,18 @@ def main():
         print("Помилка: не задано TELEGRAM_BOT_TOKEN або CHANNEL_USERNAME")
         sys.exit(1)
 
-    weekday, slot = get_current_slot()
-    if not slot:
-        print(f"Поточна UTC-година не відповідає жодному слоту публікації. Нічого не робимо.")
-        return
+    force_slot = os.environ.get("FORCE_SLOT", "").strip()
+    now = datetime.now(timezone.utc)
+    weekday = WEEKDAYS[now.weekday()]
+
+    if force_slot:
+        slot = force_slot
+        print(f"Тестовий режим: примусово беремо слот {slot} для {weekday}")
+    else:
+        weekday, slot = get_current_slot()
+        if not slot:
+            print("Поточна UTC-година не відповідає жодному слоту публікації. Нічого не робимо.")
+            return
 
     schedule = load_schedule()
     text = schedule.get(weekday, {}).get(slot)
