@@ -1,0 +1,25 @@
+name: Publish scheduled post
+
+on:
+  schedule:
+    # 05:00 UTC = 08:00 Kyiv (EEST, UTC+3)
+    - cron: "0 5 * * *"
+    # 08:00 UTC = 11:00 Kyiv (EEST, UTC+3)
+    - cron: "0 8 * * *"
+    # 12:00 UTC = 15:00 Kyiv (EEST, UTC+3)
+    - cron: "0 12 * * *"
+  workflow_dispatch: {}   # дозволяє запустити вручну для перевірки
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Publish post
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          CHANNEL_USERNAME: ${{ secrets.CHANNEL_USERNAME }}
+        run: python publish.py
