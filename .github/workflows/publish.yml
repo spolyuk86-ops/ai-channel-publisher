@@ -5,6 +5,15 @@ on:
     - cron: "0 5 * * *"
     - cron: "0 8 * * *"
     - cron: "0 12 * * *"
+  # ВАЖЛИВО: GitHub автоматично ВІДКЛЮЧАЄ `schedule`-тригер, якщо в репозиторії
+  # не було жодного коміту 60+ днів. Це офіційне обмеження GitHub Actions, не
+  # налаштування — обійти його кодом неможливо, лише зовнішнім пінгом (див.
+  # README, розділ "Захист від 60-денного відключення"). repository_dispatch
+  # нижче дозволяє зовнішньому безкоштовному cron-сервісу (cron-job.org тощо)
+  # тригерити публікацію через GitHub API як запасний канал, якщо schedule
+  # colись відключиться непомітно.
+  repository_dispatch:
+    types: [external-trigger]
   workflow_dispatch:
     inputs:
       force_slot:
@@ -16,6 +25,11 @@ on:
           - "08:00"
           - "11:00"
           - "15:00"
+        default: ""
+      force_day_index:
+        description: "Тест: примусово індекс дня циклу 0-29 (залиште порожнім для автоматичного розрахунку від сьогоднішньої дати)"
+        required: false
+        type: string
         default: ""
 
 jobs:
@@ -31,4 +45,5 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           CHANNEL_USERNAME: ${{ secrets.CHANNEL_USERNAME }}
           FORCE_SLOT: ${{ github.event.inputs.force_slot }}
+          FORCE_DAY_INDEX: ${{ github.event.inputs.force_day_index }}
         run: python publish.py
