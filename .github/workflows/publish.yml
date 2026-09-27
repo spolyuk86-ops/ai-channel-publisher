@@ -46,4 +46,7 @@ jobs:
           CHANNEL_USERNAME: ${{ secrets.CHANNEL_USERNAME }}
           FORCE_SLOT: ${{ github.event.inputs.force_slot }}
           FORCE_DAY_INDEX: ${{ github.event.inputs.force_day_index }}
+          # Яка саме cron-строка спричинила запуск — дозволяє коректно визначити
+          # слот навіть якщо GitHub Actions затримав запуск на кілька годин.
+          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
         run: python publish.py

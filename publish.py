@@ -20,10 +20,33 @@ import urllib.parse
 import urllib.error
 from datetime import datetime, date, timezone
 
-UTC_HOUR_TO_SLOT_INDEX = {
-    5: 0,   # 08:00 Europe/Kyiv (літній час, UTC+3)
-    8: 1,   # 11:00 Europe/Kyiv
-    12: 2,  # 15:00 Europe/Kyiv
+# Мапа cron-виразу (github.event.schedule) -> індекс слота. Це основний,
+# надійний спосіб визначити слот: GitHub Actions передає РІВНО той cron-рядок,
+# який спричинив запуск, незалежно від того, наскільки він запізнився.
+# Безкоштовний тариф GitHub Actions регулярно затримує schedule-запуски —
+# на практиці затримки на 1-3+ години не рідкість при високому навантаженні
+# платформи (задокументована поведінка GitHub, не наша помилка). Раніше тут
+# була перевірка "поточна година рівно 5/8/12 UTC" — і коли запуск на слот
+# 08:00 UTC стартував о 10:14 UTC (запізнення 2г14хв), умова не збігалась,
+# скрипт тихо завершувався БЕЗ публікації, хоча статус запуску був "success".
+# Саме тому в каналі не з'являлись реальні (не тестові) пости.
+CRON_TO_SLOT_INDEX = {
+    "0 5 * * *": 0,   # 08:00 Europe/Kyiv (літній час, UTC+3)
+    "0 8 * * *": 1,   # 11:00 Europe/Kyiv
+    "0 12 * * *": 2,  # 15:00 Europe/Kyiv
+}
+
+# Резервна мапа по UTC-годині — використовується лише якщо GITHUB_EVENT_SCHEDULE
+# з якоїсь причини не передано (не мало б траплятись для schedule-тригера, але
+# лишаємо як fallback замість падіння). Розширена на кілька годин наперед від
+# кожного номінального часу — покриває типові затримки. НЕ намагається
+# покрити затримки понад ~3.5 години: якщо запуск спізниться сильніше — це вже
+# означає системну проблему з GitHub Actions, яку варто діагностувати окремо,
+# а не мовчки публікувати умовний слот у довільний момент.
+UTC_HOUR_TO_SLOT_INDEX_FALLBACK = {
+    5: 0, 6: 0, 7: 0,
+    8: 1, 9: 1, 10: 1, 11: 1,
+    12: 2, 13: 2, 14: 2, 15: 2,
 }
 SLOT_LABELS = ["08:00", "11:00", "15:00"]
 
@@ -46,8 +69,17 @@ def get_day_index(schedule: dict) -> int:
 
 
 def get_slot_index():
+    cron_expr = os.environ.get("GITHUB_EVENT_SCHEDULE", "").strip()
+    if cron_expr in CRON_TO_SLOT_INDEX:
+        return CRON_TO_SLOT_INDEX[cron_expr]
+    if cron_expr:
+        print(f"Попередження: невідомий cron-вираз {cron_expr!r}, переходжу на fallback по годині UTC")
+
     now = datetime.now(timezone.utc)
-    return UTC_HOUR_TO_SLOT_INDEX.get(now.hour)
+    slot = UTC_HOUR_TO_SLOT_INDEX_FALLBACK.get(now.hour)
+    if slot is None:
+        print(f"Поточна UTC-година {now.hour} поза межами очікуваних слотів навіть з урахуванням затримки.")
+    return slot
 
 
 def build_payload(chat_id: str, post) -> dict:
