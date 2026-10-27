@@ -1,55 +1,27 @@
-"""
-Публікує пост у Telegram-канал відповідно до дня 30-денного циклу та поточного
-часу (UTC), або примусово — якщо задано FORCE_SLOT (для ручного тесту).
-
-День циклу обчислюється детерміновано від start_date у schedule.json:
-    day_index = (сьогодні - start_date) % кількість_днів_у_schedule
-
-Це дозволяє мати послідовний контент на 30 днів наперед без повторів,
-і при цьому НЕ вимагає жодного персистентного стану між запусками —
-GitHub Actions stateless, а ми просто рахуємо зсув від фіксованої дати.
-Після 30-го дня цикл починається знову з дня 0.
-"""
+"""Publish a scheduled post to Telegram."""
 
 import json
 import os
 import sys
 import time
-import urllib.request
-import urllib.parse
 import urllib.error
-from datetime import datetime, date, timezone
+import urllib.parse
+import urllib.request
+from datetime import date, datetime, timezone
 
-# Мапа cron-виразу (github.event.schedule) -> індекс слота. Це основний,
-# надійний спосіб визначити слот: GitHub Actions передає РІВНО той cron-рядок,
-# який спричинив запуск, незалежно від того, наскільки він запізнився.
-# Безкоштовний тариф GitHub Actions регулярно затримує schedule-запуски —
-# на практиці затримки на 1-3+ години не рідкість при високому навантаженні
-# платформи (задокументована поведінка GitHub, не наша помилка). Раніше тут
-# була перевірка "поточна година рівно 5/8/12 UTC" — і коли запуск на слот
-# 08:00 UTC стартував о 10:14 UTC (запізнення 2г14хв), умова не збігалась,
-# скрипт тихо завершувався БЕЗ публікації, хоча статус запуску був "success".
-# Саме тому в каналі не з'являлись реальні (не тестові) пости.
+# GitHub event.schedule tells us which cron entry triggered the run.
+# The schedule is deliberately defined in UTC to represent Kyiv local time:
+# winter: 08:00/11:00/15:00 = 06:00/09:00/13:00 UTC.
 CRON_TO_SLOT_INDEX = {
-    "0 5 * * *": 0,   # 08:00 Europe/Kyiv (літній час, UTC+3)
-    "0 8 * * *": 1,   # 11:00 Europe/Kyiv
-    "0 12 * * *": 2,  # 15:00 Europe/Kyiv
-}
-
-# Резервна мапа по UTC-годині — використовується лише якщо GITHUB_EVENT_SCHEDULE
-# з якоїсь причини не передано (не мало б траплятись для schedule-тригера, але
-# лишаємо як fallback замість падіння). Розширена на кілька годин наперед від
-# кожного номінального часу — покриває типові затримки. НЕ намагається
-# покрити затримки понад ~3.5 години: якщо запуск спізниться сильніше — це вже
-# означає системну проблему з GitHub Actions, яку варто діагностувати окремо,
-# а не мовчки публікувати умовний слот у довільний момент.
-UTC_HOUR_TO_SLOT_INDEX_FALLBACK = {
-    5: 0, 6: 0, 7: 0,
-    8: 1, 9: 1, 10: 1, 11: 1,
-    12: 2, 13: 2, 14: 2, 15: 2,
+    "0 6 * * *": 0,
+    "0 9 * * *": 1,
+    "0 13 * * *": 2,
+    # Keep compatibility with an old queued run created by the previous workflow.
+    "0 5 * * *": 0,
+    "0 8 * * *": 1,
+    "0 12 * * *": 2,
 }
 SLOT_LABELS = ["08:00", "11:00", "15:00"]
-
 MAX_RETRIES = 3
 RETRY_DELAY_SEC = 5
 
@@ -63,37 +35,24 @@ def load_schedule():
 def get_day_index(schedule: dict) -> int:
     start = date.fromisoformat(schedule["start_date"])
     today = datetime.now(timezone.utc).date()
-    delta_days = (today - start).days
-    cycle_len = len(schedule["days"])
-    return delta_days % cycle_len
+    return (today - start).days % len(schedule["days"])
 
 
 def get_slot_index():
     cron_expr = os.environ.get("GITHUB_EVENT_SCHEDULE", "").strip()
     if cron_expr in CRON_TO_SLOT_INDEX:
         return CRON_TO_SLOT_INDEX[cron_expr]
-    if cron_expr:
-        print(f"Попередження: невідомий cron-вираз {cron_expr!r}, переходжу на fallback по годині UTC")
-
-    now = datetime.now(timezone.utc)
-    slot = UTC_HOUR_TO_SLOT_INDEX_FALLBACK.get(now.hour)
-    if slot is None:
-        print(f"Поточна UTC-година {now.hour} поза межами очікуваних слотів навіть з урахуванням затримки.")
-    return slot
+    print(f"Попередження: невідомий cron {cron_expr!r}; запуск без публікації.")
+    return None
 
 
 def build_payload(chat_id: str, post) -> dict:
-    """post — або рядок (простий текст), або dict {"text":..., "button": {"text":..., "url":...}}."""
     if isinstance(post, str):
         text, button = post, None
     else:
         text, button = post.get("text", ""), post.get("button")
 
-    payload = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": "HTML",
-    }
+    payload = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
     if button:
         payload["reply_markup"] = json.dumps({
             "inline_keyboard": [[{"text": button["text"], "url": button["url"]}]]
@@ -104,32 +63,24 @@ def build_payload(chat_id: str, post) -> dict:
 def send_message(token: str, payload: dict):
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     data = urllib.parse.urlencode(payload).encode()
-
     last_error = None
+
     for attempt in range(1, MAX_RETRIES + 1):
         try:
             req = urllib.request.Request(url, data=data)
             with urllib.request.urlopen(req, timeout=30) as resp:
                 body = json.loads(resp.read().decode())
             if not body.get("ok"):
-                # Telegram відповів 200, але позначив запит як неуспішний —
-                # трапляється рідко, але без цієї перевірки помилка проходить непоміченою.
-                raise RuntimeError(f"Telegram API повернув ok=false: {body}")
-            print("Успіх:", body.get("result", {}).get("message_id"))
+                raise RuntimeError(f"Telegram API ok=false: {body}")
+            print("Успіх, message_id:", body.get("result", {}).get("message_id"))
             return
         except (urllib.error.URLError, urllib.error.HTTPError, RuntimeError) as e:
             last_error = e
-            body_detail = ""
-            if isinstance(e, urllib.error.HTTPError):
-                try:
-                    body_detail = e.read().decode()
-                except Exception:
-                    pass
-            print(f"Спроба {attempt}/{MAX_RETRIES} не вдалась: {e} {body_detail}")
+            print(f"Спроба {attempt}/{MAX_RETRIES} не вдалась: {e}")
             if attempt < MAX_RETRIES:
                 time.sleep(RETRY_DELAY_SEC)
 
-    raise SystemExit(f"Усі {MAX_RETRIES} спроби публікації провалились. Остання помилка: {last_error}")
+    raise SystemExit(f"Усі {MAX_RETRIES} спроби публікації провалились: {last_error}")
 
 
 def main():
@@ -140,36 +91,29 @@ def main():
         sys.exit(1)
 
     schedule = load_schedule()
-
     force_slot = os.environ.get("FORCE_SLOT", "").strip()
     force_day = os.environ.get("FORCE_DAY_INDEX", "").strip()
 
-    if force_day:
-        day_index = int(force_day) % len(schedule["days"])
-    else:
-        day_index = get_day_index(schedule)
+    day_index = int(force_day) % len(schedule["days"]) if force_day else get_day_index(schedule)
 
     if force_slot:
         if force_slot not in SLOT_LABELS:
-            print(f"Помилка: FORCE_SLOT має бути одним з {SLOT_LABELS}, отримано {force_slot!r}")
+            print(f"Помилка: FORCE_SLOT має бути одним з {SLOT_LABELS}")
             sys.exit(1)
         slot_index = SLOT_LABELS.index(force_slot)
-        print(f"Тестовий режим: примусово день {day_index}, слот {force_slot}")
+        print(f"Тестовий режим: день {day_index}, слот {force_slot}")
     else:
         slot_index = get_slot_index()
         if slot_index is None:
-            print("Поточна UTC-година не відповідає жодному слоту публікації. Нічого не робимо.")
             return
 
     try:
         post = schedule["days"][day_index][slot_index]
     except (IndexError, KeyError):
-        print(f"Немає поста для day_index={day_index}, slot_index={slot_index}")
-        return
+        raise SystemExit(f"Немає поста для day_index={day_index}, slot_index={slot_index}")
 
-    payload = build_payload(channel, post)
-    send_message(token, payload)
-    print(f"Опубліковано: день циклу {day_index + 1}/{len(schedule['days'])}, слот {SLOT_LABELS[slot_index]}")
+    send_message(token, build_payload(channel, post))
+    print(f"Опубліковано: день {day_index + 1}/{len(schedule['days'])}, слот {SLOT_LABELS[slot_index]}")
 
 
 if __name__ == "__main__":
