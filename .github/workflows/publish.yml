@@ -2,22 +2,17 @@ name: Publish scheduled post
 
 on:
   schedule:
-    - cron: "0 5 * * *"
-    - cron: "0 8 * * *"
-    - cron: "0 12 * * *"
-  # ВАЖЛИВО: GitHub автоматично ВІДКЛЮЧАЄ `schedule`-тригер, якщо в репозиторії
-  # не було жодного коміту 60+ днів. Це офіційне обмеження GitHub Actions, не
-  # налаштування — обійти його кодом неможливо, лише зовнішнім пінгом (див.
-  # README, розділ "Захист від 60-денного відключення"). repository_dispatch
-  # нижче дозволяє зовнішньому безкоштовному cron-сервісу (cron-job.org тощо)
-  # тригерити публікацію через GitHub API як запасний канал, якщо schedule
-  # colись відключиться непомітно.
+    - cron: "0 6 * * *"
+    - cron: "0 9 * * *"
+    - cron: "0 13 * * *"
+  # Запасний запуск через repository_dispatch.
+  # Це корисно, якщо GitHub тимчасово затримує або вимикає schedule.
   repository_dispatch:
     types: [external-trigger]
   workflow_dispatch:
     inputs:
       force_slot:
-        description: "Тест: примусово відправити пост цього слоту прямо зараз (залиште порожнім для звичайного запуску)"
+        description: "Тест: примусово відправити пост цього слоту прямо зараз"
         required: false
         type: choice
         options:
@@ -27,7 +22,7 @@ on:
           - "15:00"
         default: ""
       force_day_index:
-        description: "Тест: примусово індекс дня циклу 0-29 (залиште порожнім для автоматичного розрахунку від сьогоднішньої дати)"
+        description: "Тест: примусово індекс дня циклу 0-29"
         required: false
         type: string
         default: ""
@@ -46,7 +41,5 @@ jobs:
           CHANNEL_USERNAME: ${{ secrets.CHANNEL_USERNAME }}
           FORCE_SLOT: ${{ github.event.inputs.force_slot }}
           FORCE_DAY_INDEX: ${{ github.event.inputs.force_day_index }}
-          # Яка саме cron-строка спричинила запуск — дозволяє коректно визначити
-          # слот навіть якщо GitHub Actions затримав запуск на кілька годин.
           GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
         run: python publish.py
